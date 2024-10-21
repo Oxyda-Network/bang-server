@@ -67,4 +67,4 @@ jobs:
     
     - name: Run Deploy Script
       shell: bash
-      run: ${{ vars.DEPLOY_SCRIPT_PATH }} ${{ steps.download.outputs.download-path }}
+      run: echo ${{ secrets.USERPWD }} | sudo -S ${{ vars.DEPLOY_SCRIPT_PATH }} ${{ steps.download.outputs.download-path }}
