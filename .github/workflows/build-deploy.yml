@@ -6,16 +6,6 @@ on:
       - release
   workflow_dispatch:
     inputs:
-      skip-build:
-        description: Skip Build
-        type: boolean
-        required: false
-        default: false
-      skip-build-windows:
-        description: Skip Build-Windows
-        type: boolean
-        required: false
-        default: false
       skip-deploy:
         description: Skip Deploy
         type: boolean
@@ -29,7 +19,6 @@ env:
 
 jobs:
   build:
-    if: ${{ ! inputs.skip-build }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -63,56 +52,10 @@ jobs:
       with:
         name: bangserver
         path: build/bangserver
-
-  build-windows:
-    if: ${{ ! inputs.skip-build-windows }}
-    runs-on: windows-2022
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install Chocolatey
-      run: |
-        Set-ExecutionPolicy Bypass -Scope Process -Force; `
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; `
-        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-    
-    - name: Install packages
-      run: |
-        choco install -y cmake ninja visualstudio2019buildtools
-        choco install -y vcredist140 openssl
-
-    - name: Download and install zlib
-      run: |
-        Invoke-WebRequest -Uri "https://github.com/madler/zlib/releases/download/v1.3.1/zlib131.zip" -OutFile "zlib131.zip"
-        Expand-Archive -Path "zlib131.zip" -DestinationPath "C:/zlib"
-        Remove-Item -Path "zlib131.zip"
-
-    - name: Set up Visual Studio environment
-      shell: cmd
-      run: |
-        "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
-    
-    - name: Configure CMake
-      run: |
-        cmake -B build -G Ninja `
-        -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} `
-        -DCMAKE_C_COMPILER=cl `
-        -DCMAKE_CXX_COMPILER=cl `
-        -DOPENSSL_ROOT_DIR="C:/Program Files/OpenSSL-Win64" `
-        -DZLIB_ROOT="C:/zlib"
-    
-    - name: Build
-      run: cmake --build build --config ${{env.BUILD_TYPE}} -- /m:${{env.BUILD_PARALLEL_JOBS}}
-    
-    - name: Upload Server Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: bangserver-windows
-        path: build/bangserver.exe
   
   deploy:
     if: ${{ ! inputs.skip-deploy }}
-    runs-on: self-hosted
+    runs-on: [self-hosted, bangserver]
     needs: build
 
     steps:
