@@ -7,14 +7,15 @@
 
 namespace banggame {
 
-    static void check_escape(card_ptr origin_card, player_ptr origin, const_player_ptr target, effect_flags flags, int &value) {
-        if (!target->empty_hand() && flags.check(effect_flag::escapable) && !rn::contains(target->m_game->m_discards, "ESCAPE", &card::name)) {
-            value = 1;
-        }
-    }
-    
     void ruleset_valleyofshadows::on_apply(game *game) {
-        game->add_listener<event_type::apply_escapable_modifier>(nullptr, check_escape);
+        game->add_listener<event_type::apply_escapable_modifier>(nullptr, [](card_ptr origin_card, player_ptr origin, const_player_ptr target, effect_flags flags, int &value) {
+            if (!target->empty_hand()
+                && flags.check(effect_flag::escapable)
+                && !rn::contains(target->m_game->m_discards, "ESCAPE", &card::name)
+            ) {
+                value = 1;
+            }
+        });
 
         game->add_listener<event_type::check_damage_response>(nullptr, [](player_ptr target, bool &value) {
             if (!value && rn::any_of(target->m_game->m_players, [&](player_ptr p) {
@@ -26,7 +27,16 @@ namespace banggame {
     }
 
     void ruleset_udolistinu::on_apply(game *game) {
-        game->add_listener<event_type::apply_escapable_modifier>(nullptr, check_escape);
+        game->add_listener<event_type::apply_escapable_modifier>(nullptr, [](card_ptr origin_card, player_ptr origin, const_player_ptr target, effect_flags flags, int &value) {
+            if (!target->empty_hand()
+                && flags.check(effect_flag::escapable)
+                && flags.check(effect_flag::single_target)
+                && !flags.check(effect_flag::multi_target)
+                && !rn::contains(target->m_game->m_discards, "ESCAPE", &card::name)
+            ) {
+                value = 1;
+            }
+        });
         
         game->add_listener<event_type::check_damage_response>(nullptr, [](player_ptr target, bool &value) {
             if (!value && rn::any_of(target->m_game->m_players, [&](player_ptr p) {

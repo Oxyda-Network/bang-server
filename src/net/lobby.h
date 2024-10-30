@@ -3,6 +3,7 @@
 
 #include "options.h"
 #include "messages.h"
+#include "image_registry.h"
 
 #include "game/game.h"
 
@@ -30,15 +31,15 @@ static constexpr auto pings_until_disconnect = 2min / ping_interval;
 
 struct game_session {
     std::string username;
-    image_pixels propic;
+    image_registry::registered_image propic;
     
     game_lobby *lobby = nullptr;
 
     client_handle client;
     ticks lifetime = user_lifetime;
 
-    void set_username(const std::string &new_username);
-    void set_propic(const image_pixels &new_propic);
+    void set_username(std::string new_username);
+    void set_propic(image_pixels new_propic);
 };
 
 using session_ptr = std::shared_ptr<game_session>;
@@ -89,7 +90,7 @@ struct game_user {
 struct lobby_bot {
     int user_id;
     std::string username;
-    image_pixels_view propic;
+    image_pixels_hash propic;
 };
 
 struct game_lobby {

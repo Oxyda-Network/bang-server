@@ -2,8 +2,10 @@
 
 #include "logging.h"
 #include "tracking.h"
+#include "image_registry.h"
 
 #include "utils/json_aggregate.h"
+#include "utils/parse_string.h"
 #include "utils/misc.h"
 
 #include <variant>
@@ -68,10 +70,10 @@ namespace net {
         int listen_options = reuse_addr ? LIBUS_LISTEN_DEFAULT : LIBUS_LISTEN_EXCLUSIVE_PORT;
         visit_server([&]<bool SSL>(uWS::TemplatedApp<SSL> &server) {
             server.template ws<wsclient_data>("/", {
+#ifndef UWS_NO_ZLIB
                 .compression = uWS::CompressOptions(uWS::DEDICATED_COMPRESSOR_4KB | uWS::DEDICATED_DECOMPRESSOR),
-                
+#endif
                 .maxPayloadLength = 1 * 1024 * 1024,
-                .maxBackpressure = 16 * 1024 * 1024,
 
                 .open = [this](auto *ws) {
                     wsclient_data *data = ws->getUserData();
@@ -104,6 +106,22 @@ namespace net {
                     res->writeStatus("400 Bad Request");
                     res->writeHeader("Access-Control-Allow-Origin","*");
                     res->end(e.what());
+                }
+            })
+            .get("/image/:hash", [this](auto *res, auto *req) {
+                if (auto hash = utils::parse_string<size_t>(req->getParameter("hash"), 16)) {
+                    auto [guard, bytes] = banggame::image_registry::get_png_image_data(*hash);
+                    if (!bytes.empty()) {
+                        res->writeStatus("200 OK");
+                        res->writeHeader("Content-Type", "image/png");
+                        res->end({ reinterpret_cast<const char*>(bytes.data()), bytes.size() });
+                    } else {
+                        res->writeStatus("404 File Not Found");
+                        res->end();
+                    }
+                } else {
+                    res->writeStatus("400 Bad Request");
+                    res->end();
                 }
             })
             .listen(port, listen_options, [=, this](us_listen_socket_t *listen_socket) {

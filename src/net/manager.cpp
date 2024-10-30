@@ -136,7 +136,7 @@ static id_type generate_session_id(auto &rng, auto &map, int max_iters) {
     throw critical_error("CANNOT_GENERATE_SESSION_ID");
 }
 
-void game_manager::handle_message(utils::tag<"connect">, client_handle client, connection &con, const connect_args &args) {
+void game_manager::handle_message(utils::tag<"connect">, client_handle client, connection &con, connect_args args) {
     if (!std::holds_alternative<connection_state::not_validated>(con)) {
         throw lobby_error("USER_ALREADY_CONNECTED");
     }
@@ -155,8 +155,8 @@ void game_manager::handle_message(utils::tag<"connect">, client_handle client, c
         kick_client(session->client, "RECONNECT_WITH_SAME_SESSION_ID");
     }
 
-    session->set_username(args.username);
-    session->set_propic(args.propic);
+    session->set_username(std::move(args.username));
+    session->set_propic(std::move(args.propic));
     session->client = client;
     
     con.emplace<connection_state::connected>(session);
@@ -179,21 +179,21 @@ void game_manager::handle_message(utils::tag<"pong">, client_handle client, conn
     }
 }
 
-void game_manager::handle_message(utils::tag<"user_set_name">, session_ptr session, const std::string &username) {
-    session->set_username(username);
+void game_manager::handle_message(utils::tag<"user_set_name">, session_ptr session, std::string username) {
+    session->set_username(std::move(username));
 
     if (game_lobby *lobby = session->lobby) {
         game_user &user = lobby->find_user(session);
-        broadcast_message_lobby<"lobby_user_update">(*lobby, user.user_id, username, user.flags);
+        broadcast_message_lobby<"lobby_user_update">(*lobby, user.user_id, session->username, session->propic, user.flags);
     }
 }
 
-void game_manager::handle_message(utils::tag<"user_set_propic">, session_ptr session, const image_pixels &propic) {
-    session->set_propic(propic);
+void game_manager::handle_message(utils::tag<"user_set_propic">, session_ptr session, image_pixels propic) {
+    session->set_propic(std::move(propic));
 
     if (game_lobby *lobby = session->lobby) {
         game_user &user = lobby->find_user(session);
-        broadcast_message_lobby<"lobby_user_propic">(*lobby, user.user_id, propic);
+        broadcast_message_lobby<"lobby_user_update">(*lobby, user.user_id, session->username, session->propic, user.flags);
     }
 }
 
@@ -214,15 +214,11 @@ void game_manager::handle_message(utils::tag<"lobby_make">, session_ptr session,
     broadcast_message_no_lobby<"lobby_update">(lobby);
 
     send_message<"lobby_entered">(session->client, user.user_id, lobby.lobby_id, lobby.name, lobby.options);
-    send_message<"lobby_user_update">(session->client, user.user_id, session->username);
+    send_message<"lobby_user_update">(session->client, user.user_id, session->username, session->propic);
 
     add_lobby_chat_message(lobby, &user, {
         0, "USER_JOINED_LOBBY", {{ utils::tag<"user">{}, user.user_id }}, lobby_chat_flag::translated
     });
-    
-    if (session->propic) {
-        send_message<"lobby_user_propic">(session->client, user.user_id, session->propic);
-    }
 }
 
 void game_manager::handle_message(utils::tag<"lobby_game_options">, session_ptr session, const game_options &options) {
@@ -258,31 +254,18 @@ void game_manager::handle_join_lobby(session_ptr session, game_lobby &lobby) {
     }
     broadcast_message_no_lobby<"lobby_update">(lobby);
 
-    for (const game_user &user : lobby.connected_users()) {
-        if (user.session != session) {
-            send_message<"lobby_user_update">(user.session->client, new_user.user_id, session->username, new_user.flags);
-            if (session->propic) {
-                send_message<"lobby_user_propic">(user.session->client, new_user.user_id, session->propic);
-            }
-        }
-    }
     for (const game_user &user : lobby.users) {
+        if (!user.is_disconnected() && user.session != session) {
+            send_message<"lobby_user_update">(user.session->client, new_user.user_id, session->username, session->propic, new_user.flags);
+        }
         std::chrono::milliseconds lifetime{};
         if (!user.is_disconnected() && user.session->client.expired()) {
             lifetime = std::chrono::duration_cast<std::chrono::milliseconds>(user.session->lifetime);
         }
-        send_message<"lobby_user_update">(session->client, user.user_id, user.session->username, user.flags, lifetime);
-    }
-    for (const game_user &user : lobby.users) {
-        if (const auto &propic = user.session->propic) {
-            if (!user.is_disconnected() || (lobby.m_game && lobby.m_game->find_player_by_userid(user.user_id))) {
-                send_message<"lobby_user_propic">(session->client, user.user_id, propic);
-            }
-        }
+        send_message<"lobby_user_update">(session->client, user.user_id, user.session->username, user.session->propic, user.flags, lifetime);
     }
     for (auto &bot : lobby.bots) {
-        send_message<"lobby_user_update">(session->client, bot.user_id, bot.username);
-        send_message<"lobby_user_propic">(session->client, bot.user_id, bot.propic);
+        send_message<"lobby_user_update">(session->client, bot.user_id, bot.username, bot.propic);
     }
     for (const auto &message: lobby.chat_messages) {
         send_message<"lobby_chat">(session->client, message);
@@ -320,7 +303,7 @@ bool game_manager::add_user_flag(session_ptr session, game_user_flag flag) {
         if (!user.flags.check(flag)) {
             user.flags.add(flag);
             broadcast_message_no_lobby<"lobby_update">(*lobby);
-            broadcast_message_lobby<"lobby_user_update">(*lobby, user.user_id, session->username, user.flags);
+            broadcast_message_lobby<"lobby_user_update">(*lobby, user.user_id, session->username, session->propic, user.flags);
             return true;
         }
     }
@@ -333,7 +316,7 @@ bool game_manager::remove_user_flag(session_ptr session, game_user_flag flag) {
         if (user.flags.check(flag)) {
             user.flags.remove(flag);
             broadcast_message_no_lobby<"lobby_update">(*lobby);
-            broadcast_message_lobby<"lobby_user_update">(*lobby, user.user_id, session->username, user.flags);
+            broadcast_message_lobby<"lobby_user_update">(*lobby, user.user_id, session->username, session->propic, user.flags);
             return true;
         }
     }
@@ -386,7 +369,7 @@ void game_manager::invalidate_connection(client_handle client) {
             session->client.reset();
             if (game_lobby *lobby = session->lobby) {
                 game_user &user = lobby->find_user(session);
-                broadcast_message_lobby<"lobby_user_update">(*lobby, user.user_id, session->username, user.flags,
+                broadcast_message_lobby<"lobby_user_update">(*lobby, user.user_id, session->username, session->propic, user.flags,
                     std::chrono::duration_cast<std::chrono::milliseconds>(user.session->lifetime)
                 );
             }
@@ -562,7 +545,7 @@ void game_manager::handle_message(utils::tag<"game_start">, session_ptr session)
 
     broadcast_message_lobby<"game_started">(lobby);
 
-    lobby.m_game = std::make_unique<banggame::game>(lobby.options.game_seed);
+    lobby.m_game = std::make_unique<banggame::game>(lobby.options);
 
     logging::info("Started game {} with seed {}", lobby.name, lobby.m_game->rng_seed);
 
@@ -577,21 +560,20 @@ void game_manager::handle_message(utils::tag<"game_start">, session_ptr session)
         | rv::sample(lobby.options.num_bots, lobby.m_game->bot_rng)
         | rn::to<std::vector<std::string_view>>;
 
-    std::vector<image_pixels_view> propics = bot_info.propics
+    auto propics = bot_info.propics
         | rv::sample(lobby.options.num_bots, lobby.m_game->bot_rng)
-        | rn::to_vector;
+        | rn::to<std::vector<image_pixels_hash>>;
 
     for (int i=0; i < lobby.options.num_bots; ++i) {
         int bot_id = -1-i;
         auto &bot = lobby.bots.emplace_back(bot_id, std::format("BOT {}", names[i % names.size()]), propics[i % propics.size()]);
         user_ids.push_back(bot_id);
 
-        broadcast_message_lobby<"lobby_user_update">(lobby, bot_id, bot.username);
-        broadcast_message_lobby<"lobby_user_propic">(lobby, bot_id, bot.propic);
+        broadcast_message_lobby<"lobby_user_update">(lobby, bot_id, bot.username, bot.propic);
     }
 
     lobby.m_game->add_players(user_ids);
-    lobby.m_game->start_game(lobby.options);
+    lobby.m_game->start_game();
     lobby.m_game->commit_updates();
 }
 
